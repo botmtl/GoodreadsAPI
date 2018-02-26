@@ -1,20 +1,32 @@
+"""
 #!/usr/bin/env python
 # vim:fileencoding=UTF-8:ts=4:sw=4:sta:et:sts=4:ai
+"""
 from __future__ import (absolute_import, division, print_function, unicode_literals)
 
 import re
+# noinspection PyUnresolvedReferences
+import sys
+import traceback
 from Queue import Queue
-from datetime import date, datetime
+from threading import Event
 from urllib2 import urlopen
 
+# noinspection PyUnresolvedReferences
 from lxml import etree, objectify
 # noinspection PyUnresolvedReferences
 from lxml.etree import Element
 
-from calibre.ebooks.metadata import check_isbn, check_isbn13
+from calibre.ebooks.metadata import check_isbn13
 from calibre.ebooks.metadata.book.base import Metadata
 from calibre.ebooks.metadata.sources.base import Option, Source, fixauthors, fixcase
+from calibre.utils.config import JSONConfig
 from calibre.utils.logging import ThreadSafeLog
+
+try:
+    from typing import List, AnyStr, Any, Dict, FrozenSet, Text
+except:
+    pass
 
 __license__ = 'GPL v3'
 __copyright__ = '2017, botmtl@gmail.com'
@@ -72,12 +84,12 @@ class _ISBNConvert(object):
     def checkI10(stem):
         """Computes the ISBN-10 check digit based on the first 9 digits of a stripped ISBN-10 number."""
         chars = list(stem)
-        sum = 0
+        sum_isbn = 0
         digit = 10
         for char in chars:
-            sum += digit * int(char)
+            sum_isbn += digit * int(char)
             digit -= 1
-        check = 11 - (sum % 11)
+        check = 11 - (sum_isbn % 11)
         if check == 10:
             return "X"
         elif check == 11:
@@ -92,14 +104,14 @@ class _ISBNConvert(object):
         if len(short) != 10:
             return False
         chars = list(short)
-        sum = 0
+        sum_isbn = 0
         digit = 10
         for char in chars:
             if char == 'X' or char == 'x':
                 char = "10"
-            sum += digit * int(char)
+            sum_isbn += digit * int(char)
             digit -= 1
-        remainder = sum % 11
+        remainder = sum_isbn % 11
         if remainder == 0:
             return True
         else:
@@ -109,15 +121,15 @@ class _ISBNConvert(object):
     def _checkI13(stem):
         """Compute the ISBN-13 check digit based on the first 12 digits of a stripped ISBN-13 number. """
         chars = list(stem)
-        sum = 0
+        sum_isbn = 0
         count = 0
         for char in chars:
             if count % 2 == 0:
-                sum += int(char)
+                sum_isbn += int(char)
             else:
-                sum += 3 * int(char)
+                sum_isbn += 3 * int(char)
             count += 1
-        check = 10 - (sum % 10)
+        check = 10 - (sum_isbn % 10)
         if check == 10:
             return "0"
         else:
@@ -130,15 +142,15 @@ class _ISBNConvert(object):
         if len(short) != 13:
             return False
         chars = list(short)
-        sum = 0
+        sum_isbn = 0
         count = 0
         for char in chars:
             if count % 2 == 0:
-                sum += int(char)
+                sum_isbn += int(char)
             else:
-                sum += 3 * int(char)
+                sum_isbn += 3 * int(char)
             count += 1
-        remainder = sum % 10
+        remainder = sum_isbn % 10
         if remainder == 0:
             return True
         else:
@@ -205,7 +217,7 @@ class _LXMLWrapper(object):
         return getattr(parent, elements[-1], None)
 
     def _safe_get_element_text(self, path, root=None):
-        # type: (Element, (unicode or None)) -> unicode or None
+        # type: (Element, (unicode or None)) -> Text or None
         """Safe get element text.
 
         Get element as string or None,
@@ -215,9 +227,9 @@ class _LXMLWrapper(object):
         :return: unicode or None
         """
         element = self._safe_get_element(path, root)
-        if element is not None and hasattr(element, 'text') and element.text is not None:
+        if element is not None and hasattr(element, 'text') and element.text is not None and len(element.text) > 0:
             if isinstance(element.text, str) or isinstance(element.text, unicode):
-                return element.text.strip()
+                return unicode(element.text.strip())
         else:
             return None
 
@@ -248,13 +260,16 @@ class _GoodreadsBook(_LXMLWrapper):
     """A wrapper class for an BottlenoseAmazon product.
     """
 
-    def __init__(self, unparsedBook, tags_threshold):
+    def __init__(self, unparsedBook, tags_threshold=2):
         self.tags_threshold = tags_threshold
         super(_GoodreadsBook, self).__init__(unparsedBook)
 
     @property
     def title(self):
-        # type: () -> unicode or str or None
+        """
+        :return: Text or None: title
+        """
+        # type: () -> Text or None
         return self._safe_get_element_text('book.title')
 
     @property
@@ -262,27 +277,40 @@ class _GoodreadsBook(_LXMLWrapper):
         """
         :return: list(unicode) or list(str): book authors
         """
-        # type: () -> list(unicode) or list(str)
+        # type: () -> list
         return [author.name.text for author in self._safe_get_element('book.authors.author')]
 
     @property
     def asin(self):
-        # type: () -> unicode or str or None
+        """
+
+        :return: Text or None: asin
+        """
+        # type: () -> Text or None
         return self._safe_get_element_text('book.kindle_asin') or self._safe_get_element_text('book.asin')
 
     @property
     def isbn(self):
-        # type: () -> unicode or str or None
-        return self._safe_get_element_text('book.isbn13') or self._safe_get_element_text('book.isbn')
+        """
+        :return: Text or None: isbn
+        """
+        # type: () -> Text or None
+        return unicode(self._safe_get_element_text('book.isbn13')) or unicode(self._safe_get_element_text('book.isbn'))
 
     @property
     def id(self):
-        # type: () -> unicode or str or None
+        """
+        :return: Text or None: id
+        """
+        # type: () -> Text or None
         return self._safe_get_element_text('book.id')
 
     @property
     def language(self):
-        # type: () -> unicode or str or None
+        """
+        :return: Text or None: language
+        """
+        # type: () -> Text or None
         if self._safe_get_element_text('book.language_code') and self._safe_get_element_text('book.language_code') == 'en-US':
             return 'eng'
         else:
@@ -290,21 +318,35 @@ class _GoodreadsBook(_LXMLWrapper):
 
     @property
     def image_url(self):
-        # type: () -> unicode or str or None
+        """
+        :return: Text or None: image url
+        """
+        # type: () -> Text or None
         return self._safe_get_element_text('book.image_url')
 
     @property
     def publisher(self):
-        # type: () -> unicode or str or None
+        """
+
+        :return: Text or None: publisher
+        """
+        # type: () -> Text or None
         return self._safe_get_element_text('book.publisher')
 
     @property
     def comments(self):
-        # type: () -> unicode or str or None
+        """
+
+        :return: Text or None: comments
+        """
+        # type: () -> Text or None
         return self._safe_get_element_text('book.description')
 
     @property
     def average_rating(self):
+        """
+        :return: float or None: rating
+        """
         # type: () -> float or None
         try:
             return float(self._safe_get_element_text('book.average_rating'))
@@ -314,22 +356,34 @@ class _GoodreadsBook(_LXMLWrapper):
 
     @property
     def tags(self):
-        # type: () -> list(unicode) or list(str)
+        """
+        :return: list(): tags
+        """
+        # type: () -> list()
+        tags = []
         shelf = self._safe_get_element('book.popular_shelves.shelf')
-        if shelf is not None and len(shelf) >= 1:
+        if shelf is not None:
             try:
-                return [shelf.attrib['name'] for shelf in self._safe_get_element('book.popular_shelves.shelf') if int(shelf.attrib['count']) >= self.tags_threshold]
+                for shelf in self._safe_get_element('book.popular_shelves.shelf'):
+                    if int(shelf.attrib['count']) >= self.tags_threshold:
+                        tags.append(shelf.attrib['name'])
             except:
                 pass
-        return None
+        return tags
 
     @property
     def series(self):
-        # type: () -> unicode or str or None
+        """
+        :return: Text or None: series name
+        """
+        # type: () -> Text or None
         return self._safe_get_element_text('book.series_works.series_work.series.title')
 
     @property
     def series_index(self):
+        """
+        :return: float or None: series index
+        """
         # type: () -> float or None
         try:
             return float(self._safe_get_element_text('book.series_works.series_work.user_position'))
@@ -339,7 +393,10 @@ class _GoodreadsBook(_LXMLWrapper):
 
     @property
     def num_pages(self):
-        # type: () -> unicode or str or None
+        """
+        :return: Text or None: number of pages
+        """
+        # type: () -> Text or None
         try:
             return int(self._safe_get_element_text('book.num_pages'))
         except:
@@ -348,26 +405,41 @@ class _GoodreadsBook(_LXMLWrapper):
 
     @property
     def pubdate(self):
+        """
+        :return: datetime.date or None: publication date
+        """
         # type: () -> datetime.date or None
         year = self._safe_get_element_text('book.work.original_publication_year')
         month = self._safe_get_element_text('book.work.original_publication_month')
         day = self._safe_get_element_text('book.work.original_publication_day')
         if year and month and day:
             try:
+                from datetime import datetime
+                from datetime import date
                 return datetime.combine(date(int(year), int(month), int(day)), datetime.min.time())
             except:
                 pass
         return None
 
+    def to_string(self):
+        """
+
+        :return:
+        """
+        # type: () -> Text
+        return "title:{0}; authors:{1}; series:{2}; series_index:{3}; asin:{4}; isbn:{5}".format(self.title, ' '.join(self.authors), self.series, self.series_index, self.asin,
+                                                                                                 self.isbn)
+
 class GoodreadsAPI(Source):
+    """
+    Goodreads API
+    """
     name = 'GoodreadsAPI'
     description = 'GoodreadsAPI'
     author = 'botmtl'
-    version = (0, 0, 1)
-    minimum_calibre_version = (0, 8, 0)
-
-    capabilities = frozenset(['identify', 'cover'])
-    touched_fields = frozenset(['title', 'authors', 'identifier:goodreads', 'identifier:amazon', 'identifier:isbn', 'rating', 'comments', 'publisher', 'pubdate', 'tags', 'series'])
+    version = (0, 0, 2)
+    minimum_calibre_version = (0, 8, 1)
+    capabilities = frozenset(['identify'])
     has_html_comments = True
     supports_gzip_transfer_encoding = True
     BASE_URL = 'https://www.goodreads.com'
@@ -376,15 +448,24 @@ class GoodreadsAPI(Source):
     BOOK_SHOW_ISBN = 'https://www.goodreads.com/book/isbn/{0}.xml?key={1}'
     # name, type_, default, label, desc, choices=None
     options = [Option(name='GOODREADS_API_KEY', type_='string', default='', label='GOODREADS_API_KEY', desc='GOODREADS_API_KEY'),
-               Option(name='DISABLE_TITLE_AUTHOR_SEARCH', type_='bool', default=False, label='DISABLE_TITLE_AUTHOR_SEARCH:', desc='DISABLE_TITLE_AUTHOR_SEARCH')]
+               Option(name='SHELF_COUNT_THRESHOLD', type_='number', default=2, label='SHELF_COUNT_THRESHOLD:',
+                      desc='How many shelves does this book have to be in to be considered a tag.'),
+               Option(name='NEVER_REPLACE_AMAZONID', type_='bool', default=True, label='NEVER_REPLACE_AMAZONID:', desc='NEVER_REPLACE_AMAZONID'),
+               Option(name='NEVER_REPLACE_ISBN', type_='bool', default=True, label='NEVER_REPLACE_ISBN:', desc='NEVER_REPLACE_ISBN'),
+               Option(name='CHECK_AMAZONID_VALIDITY', type_='bool', default=True, label='CHECK_AMAZONID_VALIDITY:', desc='Not Implemented.'),
+               Option(name='ADD_THESE_TAGS', type_='string', default='GoodreadsAPI', label='Additioal tags:',
+                      desc='A comma separated list of tags to add on a sucessful metadata download.'),
+               Option(u'DISABLE_TITLE_AUTHOR_SEARCH', u'bool', False, u'Disable title/author search:',
+                      u'Only books with identifiers will have a chance for to find a match with the metadata provider.')]
 
     def __init__(self, *args, **kwargs):
         """
-
         Args:
             args:
             kwargs:
         """
+        self.touched_fields = frozenset(
+            ['title', 'authors', 'identifier:goodreads', 'identifier:amazon', 'identifier:isbn', 'rating', 'comments', 'publisher', 'pubdate', 'tags', 'series'])
         Source.__init__(self, *args, **kwargs)
 
     def is_configured(self):
@@ -399,7 +480,10 @@ class GoodreadsAPI(Source):
         return False
 
     def get_cached_cover_url(self, identifiers):
-
+        """
+        :param identifiers: list(unicode) or list(str)
+        :return: Text: url
+        """
         url = None
         if identifiers.get('goodreads'):
             url = self.cached_identifier_to_cover_url(identifiers.get('goodreads'))
@@ -411,34 +495,31 @@ class GoodreadsAPI(Source):
         Overridden from the calibre default so that we can stop this plugin messing
         with the tag casing coming from Goodreads
         """
-        mi.title = re.sub('\(.*?\)', '', mi.title)
-        mi.title = re.sub('\[.*?\]', '', mi.title)
-        mi.title = fixcase(mi.title)
-        mi.title = mi.title.strip()
+        series_in_title = r'\s*{0}\s*#?{1}\s*'.format(mi.series, mi.series_index)
+        if mi.title:
+            mi.title = re.sub(series_in_title + r'[:-]', r'', mi.title, flags=re.IGNORECASE).strip()
+            mi.title = re.sub(r'(?:[^:-]+)[:-]' + series_in_title, r'', mi.title, flags=re.IGNORECASE).strip()
+            mi.title = re.sub(r'\(.*?\)', r'', mi.title, flags=re.IGNORECASE).strip()
+            mi.title = re.sub(r'\[.*?\]', r'', mi.title, flags=re.IGNORECASE).strip()
+            mi.title = fixcase(mi.title)
+            mi.title = mi.title.strip()
 
-        mi.authors = fixauthors(mi.authors)
-        try:
-            from calibre.utils.config import JSONConfig
-            plugin_prefs = JSONConfig('plugins/Quality Check')
-            from calibre_plugins.quality_check.config import STORE_OPTIONS, KEY_AUTHOR_INITIALS_MODE, AUTHOR_INITIALS_MODES
-            initials_mode = plugin_prefs[STORE_OPTIONS].get(KEY_AUTHOR_INITIALS_MODE, AUTHOR_INITIALS_MODES[0])
-            from quality_check.helpers import get_formatted_author_initials
-            mi.authors = [get_formatted_author_initials(initials_mode, author) for author in mi.authors]
-        except:
-            pass
+        if mi.authors:
+            mi.authors = fixauthors(mi.authors)
+            try:
+                plugin_prefs = JSONConfig('plugins/Quality Check')
+                from calibre_plugins.quality_check.config import STORE_OPTIONS, KEY_AUTHOR_INITIALS_MODE, AUTHOR_INITIALS_MODES
+                initials_mode = plugin_prefs[STORE_OPTIONS].get(KEY_AUTHOR_INITIALS_MODE, u'A. B.')
+                from calibre_plugins.quality_check.helpers import get_formatted_author_initials
+                mi.authors = [get_formatted_author_initials(initials_mode, author) for author in mi.authors]
+            except:
+                pass
 
-        try:
-            mi.isbn = check_isbn(_ISBNConvert._toI13(mi.isbn))
-        except:
-            pass
-
-    def _autocomplete_api(self, search_terms, timeout, log):
-        # type: (unicode, int, ThreadSafeLog) -> dict or None
+    def _autocomplete_api(self, search_terms, timeout=10):
+        # type: (Text, int) -> dict or None
         """
         :param timeout: int: urlopen will raise an exception
-        (caught in get_goodreads_id_from_autocomplete) after this time
         :param search_terms: unicode: search term(s)
-        :param log: ThreadSafeLog: logging utility
         :return: dict: a dictionnary representing the first book found by the api.
         """
         from urllib2 import urlopen
@@ -449,7 +530,7 @@ class GoodreadsAPI(Source):
         search_terms = search_terms.replace('  ', ' ')
         search_terms = search_terms.strip().replace(' ', '+')
         autocomplete_api_url = "https://www.goodreads.com/book/auto_complete?format=json&q="
-        log.info('autocomplete url:', autocomplete_api_url, search_terms)
+        self.log.info('autocomplete url:', autocomplete_api_url, search_terms)
         response = urlopen(autocomplete_api_url + search_terms, timeout=timeout).read()
         if response is not None:
             result = json.loads(response)
@@ -457,21 +538,25 @@ class GoodreadsAPI(Source):
                 return result[0]['bookId']
         return None
 
-    def identify(self, log, result_queue, abort, title=None, authors=None, identifiers={}, timeout=30):
+    def identify(self, log, result_queue, abort, title=None, authors=None, identifiers=None, timeout=30):
         """
-        Note this method will retry without identifiers automatically if no
-        match is found with identifiers.
+
+        :param log:
+        :param result_queue:
+        :param abort:
+        :param title:
+        :param authors:
+        :param identifiers:
+        :param timeout:
+        :return:
         """
         if not identifiers: identifiers = {}
-        # Unlike the other metadata sources, if we have a goodreads id then we
-        # do not need to fire a "search" at Goodreads.com. Instead we will be
-        # able to go straight to the URL for that book.
-        # By using the autocomplete api, the previous comment is true for any book
-        # having an identifier that is either goodreads_id, isbn or amazon
         goodreads_id = None
-        print('test')
+        # noinspection PyAttributeOutsideInit
+        self.log = log
         if identifiers.get('amazon'):
             try:
+                self.log.info('ISBN_TO_BOOKID', identifiers.get('amazon'))
                 request = GoodreadsAPI.ISBN_TO_BOOKID.format(identifiers.get('amazon'), self.prefs['GOODREADS_API_KEY'])
                 goodreads_id = urlopen(request).read()
             except:
@@ -480,19 +565,30 @@ class GoodreadsAPI(Source):
             goodreads_id = identifiers.get('goodreads')
         if not goodreads_id and identifiers.get('isbn'):
             try:
+                self.log.info('ISBN_TO_BOOKID', identifiers.get('isbn'))
                 request = GoodreadsAPI.ISBN_TO_BOOKID.format(identifiers.get('isbn'), self.prefs['GOODREADS_API_KEY'])
                 goodreads_id = urlopen(request).read()
             except:
                 pass
 
         if not goodreads_id and title and not self.prefs['DISABLE_TITLE_AUTHOR_SEARCH']:
-            goodreads_id = self._autocomplete_api(' '.join(self.get_title_tokens(title)) + ' ' + ' '.join(self.get_author_tokens(authors)), 10, log)
+            self.log.info('AUTOCOMPLETEAPI:', ' '.join(self.get_title_tokens(title)) + ' ' + ' '.join(self.get_author_tokens(authors)))
+            goodreads_id = self._autocomplete_api(' '.join(self.get_title_tokens(title)) + ' ' + ' '.join(self.get_author_tokens(authors)), 10)
 
-        if goodreads_id is not None:
-            request_book = GoodreadsAPI.BOOK_SHOW.format(goodreads_id, self.prefs['GOODREADS_API_KEY'])
-            response = urlopen(request_book).read()
-            response = re.sub(re.compile(r'>\s+<', re.MULTILINE), '><', response)
-            mi = self._GoodreadsBook_to_Metadata(_GoodreadsBook(str(response), 2))
+        if goodreads_id:
+            try:
+                self.log.info('BOOK_SHOW ', goodreads_id)
+                request_book = GoodreadsAPI.BOOK_SHOW.format(goodreads_id, self.prefs['GOODREADS_API_KEY'])
+                response = urlopen(request_book).read()
+                response = re.sub(re.compile(r'>\s+<', re.MULTILINE), '><', response)
+                response = re.sub(re.compile(r'\r\n', re.MULTILINE), r'', response)
+                mi = self._GoodreadsBook_to_Metadata(_GoodreadsBook(str(response), self.prefs['SHELF_COUNT_THRESHOLD']))
+            except Exception as e:
+                self.log.error(e.message)
+                self.log.error(traceback.print_stack())
+                traceback.print_exc()
+                return
+
             self.clean_downloaded_metadata(mi)
             result_queue.put(mi)
 
@@ -508,56 +604,69 @@ class GoodreadsAPI(Source):
         mi.source_relevance = 0
         mi.set_identifier('goodreads', book.id)
 
-        if book.asin:
+        if self.prefs['NEVER_REPLACE_ISBN'] and mi.get_identifiers().get('isbn'):
+            mi.set_identifier('isbn', '')
+
+        if book.asin and not self.prefs['NEVER_REPLACE_AMAZONID']:
             mi.set_identifier('amazon', book.asin)
 
-        if book.isbn:
+        if book.isbn and not self.prefs['NEVER_REPLACE_ISBN']:
             try:
-                if _ISBNConvert.isI10(mi.isbn):
+                if len(book.isbn) == 10:
                     mi.isbn = check_isbn13(_ISBNConvert.convert(book.isbn))
                 else:
                     mi.isbn = check_isbn13(book.isbn)
             except:
-                pass
+                self.log.error("ISBN CONVERSION ERROR:", book.isbn)
+                self.log.exception()
 
         if book.image_url:
-            # self.log.info('cache_identifier_to_cover_url:' + book.asin + ',' + book.large_image_url)
+            self.log.info('cache_identifier_to_cover_url:', book.asin, ':', book.image_url)
             self.cache_identifier_to_cover_url(book.id, book.image_url)
 
         if book.publisher:
-            # self.log.info('book.publisher is:', book.publisher)
+            self.log.info('book.publisher is:', book.publisher)
             mi.publisher = book.publisher
 
         if book.pubdate:
-            # self.log.info('book.publication_date is:', book.publication_date.strftime('%Y-%m-%d'))
+            self.log.info('book.pubdate is:', book.pubdate.strftime('%Y-%m-%d'))
             mi.pubdate = book.pubdate
 
         if book.comments:
-            # self.log.info('book.editorial_review is:', book.editorial_review)
+            self.log.info('book.editorial_review is:', book.comments)
             mi.comments = book.comments
 
-        mi.tags = ['GoodreadsAPI']
-        if book.tags and len(book.tags) > 0:
-            mi.tags.extend(book.tags)
+        tags = self.prefs['ADD_THESE_TAGS'].split(',')
+        tags.extend(book.tags)
+        # tag_mappings = JSONConfig('plugins/GenreMappings')['genreMappings']
+        # mi.tags = list(set(sorted(filter(lambda x: tag_mappings.get(x, x), tags))))
 
         if book.series:
-            # self.log.info('series:', series_name, ' ', series_index)
             mi.series = book.series
+            self.log.info(u'series:', book.series)
             if book.series_index:
                 mi.series_index = book.series_index
+                self.log.info(u'series_index:', "{0:.2f}".format(book.series_index))
             else:
                 mi.series_index = 0
 
         if book.average_rating:
-            mi.rating = mi.format_rating(book.average_rating)
+            mi.rating = book.average_rating
 
         self.clean_downloaded_metadata(mi)
 
         return mi
 
+    def cli_main(self, args):
+        """
+        :type args: list
+        :param args: args
+        """
+        pass
+
     # noinspection PyDefaultArgument
     def download_cover(self, log, result_queue, abort, title=None, authors=[], identifiers={}, timeout=30, get_best_cover=False):
-        # type: (ThreadSafeLog, Queue, Event, Text, list(Text), dict(Text), int, bool) -> object
+        # type: (ThreadSafeLog, Queue, Event, Text, list(), dict(), int, bool) -> Text
         """
         Download a cover and put it into result_queue. The parameters all have
         the same meaning as for :meth:`identify`. Put (self, cover_data) into
@@ -569,6 +678,7 @@ class GoodreadsAPI(Source):
 
         If the parameter get_best_cover is True and this plugin can get
         multiple covers, it should only get the best one.
+        :type result_queue: Queue
         :param log: ThreadSafeLog: log
         :param result_queue: Queue: results
         :param abort: Event: if is_set,abort
@@ -579,6 +689,7 @@ class GoodreadsAPI(Source):
         :return:
         :type identifiers: Optional[Dict]: identifiers
         """
+        # noinspection PyAttributeOutsideInit
         self.log = log
         cached_url = self.get_cached_cover_url(identifiers)
         if cached_url is None:
@@ -589,11 +700,11 @@ class GoodreadsAPI(Source):
                 cached_url = self.get_cached_cover_url(identifiers)
                 if cached_url is None:
                     return u'Download cover failed.  Could not identify.'
-            except:
-                return
+            except Exception as e:
+                return e.message
 
         if abort.is_set():
-            return
+            return "abort"
 
         br = self.browser
         self.log.info(u'Downloading cover from:', cached_url)
@@ -607,7 +718,7 @@ class GoodreadsAPI(Source):
 if __name__ == '__main__':  # tests
     # To run these test use:
     # calibre-debug -e __init__.py
-    from calibre.ebooks.metadata.sources.test import (test_identify_plugin, title_test, authors_test, series_test)
+    from calibre.ebooks.metadata.sources.test import (test_identify_plugin, title_test, authors_test)
 
-    test_identify_plugin(GoodreadsAPI.name, [(  # A book with an ISBN
-        {'identifiers': {'isbn': '9780385340588'}}, [title_test('61 Hours', exact=True), authors_test(['Lee Child']), series_test('Jack Reacher', 14.0)])])
+    test_identify_plugin(GoodreadsAPI.name, [
+        ({u'title': u'The Omega''s Fake Mate', u'authors': [u'Ann-Katrin Byrde']}, [title_test(u'Expert C# 2008 Business Objects'), authors_test([u'Rockford Lhotka'])])])
